@@ -864,14 +864,29 @@ void ListObjects(const URI &path,
 }  // namespace s3
 
 S3FileSystem::S3FileSystem() {
+  GetAWSCredentialsFromEnvironment();
+  if (aws_access_id_ == "" || aws_secret_key_ = "") {
+    DefaultAWSCredentialsToIAMPolicy();
+  }
+
+  if (aws_access_id_ == "") {
+    LOG(FATAL) << "Need to set enviroment variable AWS_ACCESS_KEY_ID or IAM policy to use S3";
+  }
+  if (aws_secret_key_ == "") {
+    LOG(FATAL) << "Need to set enviroment variable AWS_SECRET_ACCESS_KEY or IAM policy to use S3";
+  }
+}
+
+void S3FileSystem::GetAWSCredentialsFromEnvironment() {
   const char *keyid = getenv("AWS_ACCESS_KEY_ID");
   const char *seckey = getenv("AWS_SECRET_ACCESS_KEY");
   const char *region = getenv("AWS_REGION");
-  if (keyid == NULL) {
-    LOG(FATAL) << "Need to set enviroment variable AWS_ACCESS_KEY_ID to use S3";
+
+  if (keyid != NULL) {
+    aws_access_id_ = keyid;
   }
   if (seckey == NULL) {
-    LOG(FATAL) << "Need to set enviroment variable AWS_SECRET_ACCESS_KEY to use S3";
+    aws_secret_key_ = seckey;
   }
 
   if (region == NULL) {
@@ -883,9 +898,51 @@ S3FileSystem::S3FileSystem() {
   } else {
     aws_region_ = region;
   }
+}
 
-  aws_access_id_ = keyid;
-  aws_secret_key_ = seckey;
+// curl callback to write sstream
+size_t WriteSStreamCallback(char *buf, size_t size, size_t count, void *fp) {
+  static_cast<std::ostringstream*>(fp)->write(buf, size * count);
+  return size * count;
+}
+
+void S3FileSystem::DefaultAWSCredentialsToIAMPolicy() {
+  // Requests and parses access and secret keys based on the following:
+  // http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials
+  const string iam_access_url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/s3access";
+
+  std::ostringstream result;
+  CURL *curl = curl_easy_init();
+  assert(curl_easy_setopt(curl, CURLOPT_URL, iam_access_url) == CURLE_OK);
+  assert(curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) == CURLE_OK);
+  assert(curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteSStreamCallback) == CURLE_OK);
+  assert(curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result) == CURLE_OK);
+  assert(curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1) == CURLE_OK);
+  assert(curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5) == CURLE_OK); // timeout for request
+  assert(curl_easy_perform(curl) == CURLE_OK);
+  curl_easy_cleanup(curl);
+
+  std::string response = result.str();
+
+  std::regex access_key_id_re("\"AccessKeyId\"\\s*?:\\s*\"(.*?)\"");
+  std::smatch access_key_id_result;
+  std::regex_search(response, access_key_id_result, access_key_id_re);
+
+  if (aws_access_id_ == "" && access_key_id_result.size() == 2) {
+    std::smatch::iterator access_key_id_match_iter = access_key_id_result.begin();
+    ++access_key_id_match_iter;
+    aws_access_id_ = *access_key_id_match_iter;
+  }
+
+  std::regex secret_access_key_re("\"SecretAccessKey\"\\s*?:\\s*\"(.*?)\"");
+  std::smatch secret_access_key_result;
+  std::regex_search(response, secret_access_key_result, secret_access_key_re);
+
+  if (aws_secret_key_ == "" && secret_access_key_result.size() == 2) {
+    std::smatch::iterator secret_access_key_match_iter = secret_access_key_result.begin();
+    ++secret_access_key_match_iter;
+    aws_secret_key_ = *secret_access_key_match_iter;
+  }
 }
 
 void S3FileSystem::SetCredentials(const std::string& aws_access_id,

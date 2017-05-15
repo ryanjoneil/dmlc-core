@@ -69,6 +69,10 @@ class S3FileSystem : public FileSystem {
  private:
   /*! \brief constructor */
   S3FileSystem();
+  /*! \brief get AWS credentials from environment */
+  void GetAWSCredentialsFromEnvironment();
+  /*! \brief get AWS access id and secret key from IAM policy */
+  void DefaultAWSCredentialsToIAMPolicy();
   /*! \brief AWS access id */
   std::string aws_access_id_;
   /*! \brief AWS secret key */
